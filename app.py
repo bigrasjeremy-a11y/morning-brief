@@ -114,30 +114,52 @@ def fetch_headlines():
 @st.cache_data(ttl=300)
 def fetch_forexfactory():
     """
-    Fetch USD high-impact (red) and medium-impact (orange) events.
-    Tries three sources in order:
-    1. JBlanked ForexFactory API (free, no key)
-    2. MQL5 calendar via JBlanked (backup)
-    3. Finnhub economic calendar (if API key available)
+    Try live ForexFactory-sourced calendar APIs.
+    Returns list of events or empty list if all sources are blocked.
+    The app always falls back to AI-generated calendar if this returns empty.
     """
     events = []
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
-    # Source 1: JBlanked ForexFactory endpoint
-    for impact_label, impact_param in [("red","High"), ("orange","Medium")]:
+    # Attempt 1: nfs.faireconomy.media (ForexFactory's own CDN — sometimes accessible)
+    try:
+        r = requests.get("https://nfs.faireconomy.media/ff_calendar_thisweek.json",
+            headers=headers, timeout=8)
+        if r.status_code == 200:
+            raw = r.json()
+            for ev in raw:
+                imp = ev.get("impact","").lower()
+                if imp in ("high","medium"):
+                    events.append({
+                        "day":      ev.get("date","")[:3] if ev.get("date") else "",
+                        "date":     ev.get("date",""),
+                        "time":     ev.get("time",""),
+                        "event":    ev.get("title",""),
+                        "currency": ev.get("country",""),
+                        "impact":   "red" if imp == "high" else "orange",
+                        "forecast": ev.get("forecast","—") or "—",
+                        "previous": ev.get("previous","—") or "—",
+                        "actual":   ev.get("actual","") or "",
+                        "source":   "ForexFactory"
+                    })
+            if events:
+                return events[:25]
+    except: pass
+
+    # Attempt 2: JBlanked ForexFactory API
+    for impact_label, impact_param in [("red","High"),("orange","Medium")]:
         for endpoint in ["week","today"]:
             try:
                 r = requests.get(
                     f"https://www.jblanked.com/news/api/forex-factory/calendar/{endpoint}/",
                     params={"currency":"USD","impact":impact_param},
-                    timeout=12,
-                    headers={"User-Agent":"Mozilla/5.0 (compatible; MorningBrief/1.0)"}
-                )
+                    headers=headers, timeout=10)
                 if r.status_code == 200:
                     data = r.json()
-                    if isinstance(data, list) and len(data) > 0:
+                    if isinstance(data, list) and data:
                         for ev in data:
                             events.append({
-                                "day":      ev.get("day", ev.get("date","")[:3] if ev.get("date") else ""),
+                                "day":      ev.get("day",""),
                                 "date":     ev.get("date",""),
                                 "time":     ev.get("time",""),
                                 "event":    ev.get("title", ev.get("name", ev.get("event",""))),
@@ -149,68 +171,7 @@ def fetch_forexfactory():
                                 "source":   "ForexFactory"
                             })
                         break
-            except:
-                pass
-
-    # Source 2: JBlanked MQL5 calendar (backup if ForexFactory returns nothing)
-    if not events:
-        for impact_label, impact_param in [("red","High"), ("orange","Medium")]:
-            for endpoint in ["week","today"]:
-                try:
-                    r = requests.get(
-                        f"https://www.jblanked.com/news/api/mql5/calendar/{endpoint}/",
-                        params={"currency":"USD","impact":impact_param},
-                        timeout=12,
-                        headers={"User-Agent":"Mozilla/5.0 (compatible; MorningBrief/1.0)"}
-                    )
-                    if r.status_code == 200:
-                        data = r.json()
-                        if isinstance(data, list) and len(data) > 0:
-                            for ev in data:
-                                events.append({
-                                    "day":      ev.get("day",""),
-                                    "date":     ev.get("date",""),
-                                    "time":     ev.get("time",""),
-                                    "event":    ev.get("title", ev.get("name", ev.get("event",""))),
-                                    "currency": ev.get("currency","USD"),
-                                    "impact":   impact_label,
-                                    "forecast": ev.get("forecast","—") or "—",
-                                    "previous": ev.get("previous","—") or "—",
-                                    "actual":   ev.get("actual","") or "",
-                                    "source":   "MQL5"
-                                })
-                            break
-                except:
-                    pass
-
-    # Source 3: Finnhub fallback (uses FINNHUB_API_KEY if available)
-    if not events and FINNHUB_API_KEY:
-        try:
-            today  = datetime.now()
-            end    = today + timedelta(days=7)
-            r = requests.get("https://finnhub.io/api/v1/calendar/economic", params={
-                "from": today.strftime("%Y-%m-%d"),
-                "to":   end.strftime("%Y-%m-%d"),
-                "token": FINNHUB_API_KEY
-            }, timeout=10)
-            if r.status_code == 200:
-                for ev in r.json().get("economicCalendar",[]):
-                    imp = str(ev.get("impact","")).lower()
-                    if imp in ("high","3"):
-                        events.append({
-                            "day":      "",
-                            "date":     ev.get("time","")[:10],
-                            "time":     ev.get("time","")[11:16] if len(ev.get("time",""))>10 else "",
-                            "event":    ev.get("event",""),
-                            "currency": ev.get("country","").upper(),
-                            "impact":   "red",
-                            "forecast": str(ev.get("estimate","—")) or "—",
-                            "previous": str(ev.get("prev","—")) or "—",
-                            "actual":   str(ev.get("actual","")) if ev.get("actual") else "",
-                            "source":   "Finnhub"
-                        })
-        except:
-            pass
+            except: pass
 
     return events[:25]
 
@@ -333,9 +294,13 @@ INST_SYS = f"""You are a Goldman Sachs institutional strategist. Today is {TODAY
 Return ONLY raw JSON no markdown:
 {{"overview":"<3-4 sentences — describe overall institutional posture today with specific evidence of what smart money desks are doing and the reasoning behind it>","xauusd":"<3-4 sentences — cite specific COT positioning data, gold ETF flow direction and magnitude if known, major bank price targets, hedge fund positioning>","xauusd_action":"Buy/Hold/Sell","nq":"<3-4 sentences — describe tech fund flows, options market positioning including put/call ratio or skew, any institutional notes on AI capex or rate sensitivity>","nq_action":"Buy/Hold/Sell","es":"<3-4 sentences — net S&P futures positioning, ETF flow data, risk committee signals at major banks, key support levels being watched>","es_action":"Buy/Hold/Sell","us30":"<3-4 sentences — value rotation flows, sector-specific flows in energy/industrials/financials, any Dow-specific institutional catalysts today>","us30_action":"Buy/Hold/Sell","key_signal":"<2-3 sentences — describe the single most important institutional signal today, what it means for positioning, and what action it implies>"}}"""
 
-NEWS_SYS = f"""Financial news aggregator. Today is {TODAY}. Use the provided headlines and calendar data.
+NEWS_SYS = f"""You are a financial news aggregator and economic calendar expert. Today is {TODAY}.
+
+Use the provided headlines AND your knowledge of the current week's economic calendar.
+For the calendar section: include ALL high-impact (red) and medium-impact (orange) USD economic events this week from ForexFactory. These typically include: NFP, CPI, PPI, FOMC, GDP, Retail Sales, PCE, ISM Manufacturing/Services, Jobless Claims, Fed speeches, Housing data. Include the actual values if they have already been released today or earlier this week.
+
 Return ONLY raw JSON no markdown:
-{{"news":[{{"time":"<HH:MM ET or Today>","headline":"<concise headline max 12 words>","summary":"<2 sentences explaining what happened and why it matters for markets>","url":"<url>","source":"<source name>","impact":"high/medium/low","category":"Geopolitical/Macro/Earnings/Fed/Energy/Equity/FX"}}],"calendar":[{{"day":"<Mon/Tue/Wed/Thu/Fri>","date":"<date>","time":"<HH:MM ET>","event":"<full event name>","impact":"red/orange","forecast":"<value or blank>","previous":"<value or blank>","actual":"<value if released or blank>","affects":"<which of XAU/USD NQ ES US30 are affected and how>","why_it_matters":"<1 sentence explaining what this number means for markets>"}}]}}"""
+{{"news":[{{"time":"<HH:MM ET or Today>","headline":"<concise headline max 12 words>","summary":"<2 sentences explaining what happened and why it matters for markets>","url":"<url>","source":"<source name>","impact":"high/medium/low","category":"Geopolitical/Macro/Earnings/Fed/Energy/Equity/FX"}}],"calendar":[{{"day":"<Mon/Tue/Wed/Thu/Fri>","date":"<e.g. May 1>","time":"<HH:MM ET>","event":"<full official event name>","impact":"red/orange","forecast":"<consensus estimate or blank>","previous":"<prior release value or blank>","actual":"<actual value if already released today or earlier this week, else blank>","affects":"<which of XAU/USD NQ ES US30 are affected>","why_it_matters":"<1 sentence: what a beat or miss means for your assets>"}}]}}"""
 
 # ── CONSTANTS ─────────────────────────────────────────────────────────────────
 # Bias colors and borders — GREEN for bullish, RED for bearish
@@ -695,30 +660,71 @@ def main():
     text_m   = "#64748b" if is_dark else "#64748b"
     divider  = "rgba(255,255,255,.05)" if is_dark else "rgba(0,0,0,.08)"
 
-    # Inject theme CSS
+    # Inject theme CSS — comprehensive light/dark overrides
+    card_bg     = "rgba(0,0,0,0.03)"      if not is_dark else "rgba(255,255,255,.025)"
+    card_border = "rgba(0,0,0,0.1)"       if not is_dark else "rgba(255,255,255,.08)"
+    muted_text  = "#374151"               if not is_dark else "#94a3b8"
+    subtle_text = "#6b7280"               if not is_dark else "#64748b"
+    faint_text  = "#9ca3af"               if not is_dark else "#475569"
     st.markdown(f"""<style>
-    html,body,[class*="css"],.stApp{{background-color:{bg}!important;color:{text_p}!important}}
-    .stApp{{background-color:{bg}!important}}
-    .block-container{{background-color:{bg}!important}}
+    html,body,[class*="css"],.stApp,.block-container,.main{{
+        background-color:{bg}!important;color:{text_p}!important
+    }}
+    /* Light mode comprehensive overrides */
+    {"" if is_dark else f"""
+    .stTabs [data-baseweb=tab-list]{{background:rgba(0,0,0,0.05)!important}}
+    .stTabs [data-baseweb=tab]{{color:#374151!important}}
+    .stTabs [aria-selected=true]{{background:rgba(0,0,0,0.12)!important;color:#111827!important}}
+    .stButton>button{{color:#e0e7ff!important}}
+    .streamlit-expanderHeader{{background:rgba(0,0,0,0.03)!important;border:1px solid rgba(0,0,0,0.1)!important;color:#374151!important}}
+    .streamlit-expanderContent{{background:rgba(0,0,0,0.02)!important;border:1px solid rgba(0,0,0,0.08)!important}}
+    """}
     </style>""", unsafe_allow_html=True)
+    
+    # Store theme vars in session for use in render functions
+    st.session_state["_bg"]          = bg
+    st.session_state["_text_p"]      = text_p
+    st.session_state["_text_s"]      = text_s
+    st.session_state["_card_bg"]     = card_bg
+    st.session_state["_card_border"] = card_border
+    st.session_state["_muted"]       = muted_text
+    st.session_state["_subtle"]      = subtle_text
+    st.session_state["_faint"]       = faint_text
+    st.session_state["_divider"]     = divider
 
     # Header with toggle
     toggle_icon = "☀️" if is_dark else "🌙"
     toggle_label = " Light" if is_dark else " Dark"
-    col_logo, col_toggle = st.columns([6, 1])
-    with col_logo:
-        st.markdown(f"""
-        <div style="display:flex;align-items:center;gap:10px;padding:16px 0 14px;margin-bottom:4px;border-bottom:1px solid {divider};">
-            <div style="width:30px;height:30px;border-radius:9px;background:linear-gradient(135deg,#1e40af,#6d28d9);display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:800;color:white;">J</div>
+    # Header with tiny icon toggle fixed to top-right
+    st.markdown(f"""
+    <div style="display:flex;align-items:center;justify-content:space-between;
+        padding:14px 0 12px;margin-bottom:16px;border-bottom:1px solid {divider};">
+        <div style="display:flex;align-items:center;gap:10px;">
+            <div style="width:30px;height:30px;border-radius:9px;background:linear-gradient(135deg,#1e40af,#6d28d9);
+                display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:800;color:white;">J</div>
             <div><div style="font-size:14px;font-weight:700;color:{text_p};">Morning Brief</div>
             <div style="font-size:10px;color:{text_m};letter-spacing:.06em;">{now}</div></div>
-        </div>""", unsafe_allow_html=True)
-    with col_toggle:
-        st.markdown('<div style="padding-top:14px;"></div>', unsafe_allow_html=True)
-        if st.button(f"{toggle_icon}{toggle_label}", key="theme_toggle"):
-            st.session_state.dark_mode = not st.session_state.dark_mode
-            st.rerun()
-    st.markdown('<div style="margin-bottom:16px;"></div>', unsafe_allow_html=True)
+        </div>
+    </div>""", unsafe_allow_html=True)
+
+    # Float the toggle button top-right using CSS trick
+    st.markdown(f"""
+    <style>
+    div[data-testid="stButton"]:has(button[kind="secondary"]#theme_btn) {{
+        position:fixed;top:12px;right:16px;z-index:9999;
+    }}
+    button[kind="secondary"]#theme_btn,
+    div[data-testid="stButton"] button:first-child {{
+        padding:4px 10px!important;font-size:12px!important;
+        background:rgba(99,102,241,0.15)!important;
+        border:1px solid rgba(99,102,241,0.3)!important;
+        color:#a5b4fc!important;border-radius:20px!important;
+        box-shadow:none!important;min-height:0!important;height:28px!important;
+    }}
+    </style>""", unsafe_allow_html=True)
+    if st.button(toggle_icon, key="theme_toggle", help="Toggle light/dark mode"):
+        st.session_state.dark_mode = not st.session_state.dark_mode
+        st.rerun()
 
     if not GROQ_API_KEY:
         st.error("⚠ GROQ_API_KEY not found — go to Manage App → Secrets."); st.stop()
@@ -781,7 +787,9 @@ def main():
                 for h in other_h[:4]: all_h.append(f"[{h['source']}] {h['title']}")
                 n_ctx  = "\n".join(all_h)
                 ff_ctx = "\n".join([f"{ev.get('day','')} {ev.get('date','')} {ev.get('time','')} | {ev.get('impact','').upper()} | {ev.get('event','')} | Forecast: {ev.get('forecast','—')} | Previous: {ev.get('previous','—')}" + (f" | ACTUAL: {ev['actual']}" if ev.get('actual') else "") for ev in (st.session_state.ff_cal or [])]) or "No ForexFactory data."
-                st.session_state.news_data = parse_json(call_groq(NEWS_SYS, f"Headlines:\n{n_ctx}\n\nForexFactory Calendar (use this for the calendar section, include why_it_matters for each):\n{ff_ctx}\n\nConvert to JSON.", 2000))
+                ff_note = f"ForexFactory live calendar data:\n{ff_ctx}" if (st.session_state.ff_cal or []) else "No live ForexFactory data available — generate the calendar from your knowledge of this week's USD economic events."
+                st.session_state.news_data = parse_json(call_groq(NEWS_SYS,
+                    f"Headlines:\n{n_ctx}\n\n{ff_note}\n\nGenerate the full JSON including a complete economic calendar for the week.", 2200))
 
                 st.session_state.deep_dives    = {}
                 st.session_state.inst          = None
