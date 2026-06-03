@@ -547,56 +547,87 @@ def render_news(headlines, news_data, ff_cal):
 
     if ff_cal:
         for ev in ff_cal:
-            impact = ev.get("impact","orange")
-            is_red = impact == "red"
-            bdr    = "#ef4444" if is_red else "#f97316"
-            bg     = "rgba(239,68,68,.07)" if is_red else "rgba(249,115,22,.05)"
-            folder = "🔴" if is_red else "🟠"
-            actual_html = f'<span style="font-size:11px;font-weight:700;color:#4ade80;margin-left:6px;">Actual: {ev["actual"]}</span>' if ev.get("actual") else ""
-            why = ev.get("why_it_matters","")
-            affects = ev.get("affects","")
+            impact   = ev.get("impact","orange")
+            is_red   = impact == "red"
+            bdr      = "#ef4444" if is_red else "#f97316"
+            bg_ev    = "rgba(239,68,68,.07)" if is_red else "rgba(249,115,22,.05)"
+            folder   = "🔴" if is_red else "🟠"
+            forecast = ev.get("forecast","—") or "—"
+            previous = ev.get("previous","—") or "—"
+            actual   = ev.get("actual","") or ""
+            affects  = ev.get("affects","") or ""
+            why      = ev.get("why_it_matters","") or ""
+            day_str  = f"{ev.get('day','')} {ev.get('date','')} · {ev.get('time','')}".strip()
+
+            actual_row  = f'<span style="font-size:11px;font-weight:700;color:#4ade80;margin-left:6px;">✓ Actual: {actual}</span>' if actual else ""
+            affects_row = f'<div style="font-size:10px;color:#64748b;margin-top:4px;">Affects: {affects}</div>' if affects else ""
+            why_row     = f'<div style="font-size:11px;color:#64748b;line-height:1.5;border-top:1px solid rgba(255,255,255,.04);padding-top:5px;margin-top:4px;">{why}</div>' if why else ""
+
             st.markdown(f"""
-            <div style="background:{bg};border:1px solid {bdr}44;border-left:3px solid {bdr};border-radius:8px;padding:11px 14px;margin-bottom:7px;">
-                <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px;flex-wrap:wrap;">
+            <div style="background:{bg_ev};border:1px solid {bdr}44;border-left:3px solid {bdr};border-radius:8px;padding:11px 14px;margin-bottom:7px;">
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap;">
                     <span style="font-size:13px;">{folder}</span>
-                    <span style="font-size:11px;font-weight:700;color:{bdr};">{ev.get("day","")} {ev.get("date","")} · {ev.get("time","")}</span>
-                    <span style="font-size:11px;color:#475569;">·</span>
+                    <span style="font-size:11px;font-weight:700;color:{bdr};">{day_str}</span>
                     <span style="font-size:12px;font-weight:700;color:#f1f5f9;">{ev.get("event","")}</span>
                     <span style="font-size:10px;color:#334155;">{ev.get("currency","USD")}</span>
-                    {actual_html}
+                    {actual_row}
                 </div>
-                <div style="display:flex;gap:16px;margin-bottom:{5 if why or affects else 0}px;">
-                    <div><span style="font-size:10px;color:#475569;text-transform:uppercase;letter-spacing:.07em;">Forecast</span><div style="font-size:12px;font-weight:600;color:#a5b4fc;font-family:'DM Mono',monospace;">{ev.get("forecast","—")}</div></div>
-                    <div><span style="font-size:10px;color:#475569;text-transform:uppercase;letter-spacing:.07em;">Previous</span><div style="font-size:12px;font-weight:600;color:#94a3b8;font-family:'DM Mono',monospace;">{ev.get("previous","—")}</div></div>
-                    {f'<div><span style="font-size:10px;color:#475569;text-transform:uppercase;letter-spacing:.07em;">Affects</span><div style="font-size:11px;color:#64748b;">{affects}</div></div>' if affects else ""}
+                <div style="display:flex;gap:20px;margin-bottom:2px;">
+                    <div>
+                        <div style="font-size:9px;color:#475569;text-transform:uppercase;letter-spacing:.07em;margin-bottom:2px;">Forecast</div>
+                        <div style="font-size:13px;font-weight:600;color:#a5b4fc;font-family:'DM Mono',monospace;">{forecast}</div>
+                    </div>
+                    <div>
+                        <div style="font-size:9px;color:#475569;text-transform:uppercase;letter-spacing:.07em;margin-bottom:2px;">Previous</div>
+                        <div style="font-size:13px;font-weight:600;color:#94a3b8;font-family:'DM Mono',monospace;">{previous}</div>
+                    </div>
                 </div>
-                {f'<div style="font-size:11px;color:#64748b;line-height:1.5;border-top:1px solid rgba(255,255,255,.04);padding-top:5px;">{why}</div>' if why else ""}
+                {affects_row}
+                {why_row}
             </div>""", unsafe_allow_html=True)
     else:
         # Show AI-generated calendar from news brief
         ai_cal = news_data.get("calendar",[])
         if ai_cal:
             for ev in ai_cal:
-                is_red = ev.get("impact","orange") == "red"
-                bdr    = "#ef4444" if is_red else "#f97316"
-                bg     = "rgba(239,68,68,.07)" if is_red else "rgba(249,115,22,.05)"
-                folder = "🔴" if is_red else "🟠"
+                is_red  = ev.get("impact","orange") == "red"
+                bdr     = "#ef4444" if is_red else "#f97316"
+                bg_ev   = "rgba(239,68,68,.07)" if is_red else "rgba(249,115,22,.05)"
+                folder  = "🔴" if is_red else "🟠"
+                forecast = ev.get("forecast","—") or "—"
+                previous = ev.get("previous","—") or "—"
+                actual   = ev.get("actual","") or ""
+                affects  = ev.get("affects","") or ""
+                why      = ev.get("why_it_matters","") or ""
+                day_str  = f"{ev.get('day','')} · {ev.get('date','')} · {ev.get('time','')}".strip(" ·")
+
+                actual_row = f'<span style="font-size:11px;font-weight:700;color:#4ade80;margin-left:6px;">✓ Actual: {actual}</span>' if actual else ""
+                affects_row = f'<div style="font-size:10px;color:#64748b;margin-top:4px;">Affects: {affects}</div>' if affects else ""
+                why_row = f'<div style="font-size:11px;color:#64748b;line-height:1.5;border-top:1px solid rgba(255,255,255,.04);padding-top:5px;margin-top:4px;">{why}</div>' if why else ""
+
                 st.markdown(f"""
-                <div style="background:{bg};border:1px solid {bdr}44;border-left:3px solid {bdr};border-radius:8px;padding:11px 14px;margin-bottom:7px;">
-                    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:5px;">
-                        <span>{folder}</span>
-                        <span style="font-size:11px;font-weight:700;color:{bdr};">{ev.get("day","")} · {ev.get("time","")}</span>
+                <div style="background:{bg_ev};border:1px solid {bdr}44;border-left:3px solid {bdr};border-radius:8px;padding:11px 14px;margin-bottom:7px;">
+                    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
+                        <span style="font-size:13px;">{folder}</span>
+                        <span style="font-size:11px;font-weight:700;color:{bdr};">{day_str}</span>
                         <span style="font-size:12px;font-weight:700;color:#f1f5f9;">{ev.get("event","")}</span>
+                        {actual_row}
                     </div>
-                    <div style="display:flex;gap:14px;margin-bottom:{4 if ev.get('why_it_matters') else 0}px;">
-                        <div><span style="font-size:10px;color:#475569;text-transform:uppercase;letter-spacing:.07em;">Forecast</span><div style="font-size:12px;font-weight:600;color:#a5b4fc;font-family:'DM Mono',monospace;">{ev.get("forecast","—")}</div></div>
-                        <div><span style="font-size:10px;color:#475569;text-transform:uppercase;letter-spacing:.07em;">Previous</span><div style="font-size:12px;font-weight:600;color:#94a3b8;font-family:'DM Mono',monospace;">{ev.get("previous","—")}</div></div>
-                        {f'<div><span style="font-size:10px;color:#475569;text-transform:uppercase;letter-spacing:.07em;">Affects</span><div style="font-size:11px;color:#64748b;">{ev.get("affects","")}</div></div>' if ev.get("affects") else ""}
+                    <div style="display:flex;gap:20px;margin-bottom:2px;">
+                        <div>
+                            <div style="font-size:9px;color:#475569;text-transform:uppercase;letter-spacing:.07em;margin-bottom:2px;">Forecast</div>
+                            <div style="font-size:13px;font-weight:600;color:#a5b4fc;font-family:'DM Mono',monospace;">{forecast}</div>
+                        </div>
+                        <div>
+                            <div style="font-size:9px;color:#475569;text-transform:uppercase;letter-spacing:.07em;margin-bottom:2px;">Previous</div>
+                            <div style="font-size:13px;font-weight:600;color:#94a3b8;font-family:'DM Mono',monospace;">{previous}</div>
+                        </div>
                     </div>
-                    {f'<div style="font-size:11px;color:#64748b;">{ev.get("why_it_matters","")}</div>' if ev.get("why_it_matters") else ""}
+                    {affects_row}
+                    {why_row}
                 </div>""", unsafe_allow_html=True)
         else:
-            st.info("No ForexFactory calendar data loaded. Generate a brief to populate the schedule.")
+            st.info("No calendar data available — click Generate Brief to load the economic schedule.")
 
     st.markdown("---")
 
@@ -629,17 +660,21 @@ def render_news(headlines, news_data, ff_cal):
         st.markdown('<div style="font-size:11px;font-weight:700;color:#475569;letter-spacing:.1em;text-transform:uppercase;margin-bottom:3px;">Quick Calendar Reference</div><div style="font-size:10px;color:#334155;margin-bottom:10px;">🔴 Red · 🟠 Orange only</div>', unsafe_allow_html=True)
         cal_items = ff_cal or news_data.get("calendar",[])
         for ev in cal_items[:8]:
-            imp = ev.get("impact","orange")
-            bdr = "#ef4444" if imp=="red" else "#f97316"
-            folder = "🔴" if imp=="red" else "🟠"
+            imp      = ev.get("impact","orange")
+            bdr      = "#ef4444" if imp=="red" else "#f97316"
+            folder   = "🔴" if imp=="red" else "🟠"
+            forecast = ev.get("forecast","—") or "—"
+            previous = ev.get("previous","—") or "—"
+            actual   = ev.get("actual","") or ""
+            day_line = f"{folder} {ev.get('day','')} {ev.get('date','')} · {ev.get('time','')}".strip()
+            actual_bit = f' <span style="color:#4ade80;font-weight:700;">Act: {actual}</span>' if actual else ""
             st.markdown(f"""
             <div style="background:rgba(255,255,255,.02);border:1px solid {bdr}33;border-left:2px solid {bdr};border-radius:7px;padding:9px 11px;margin-bottom:5px;">
-                <div style="font-size:9px;color:{bdr};font-weight:700;margin-bottom:2px;">{folder} {ev.get("day","")}{" · " + ev.get("date","") if ev.get("date") else ""} · {ev.get("time","")}</div>
-                <div style="font-size:11px;font-weight:600;color:#cbd5e1;margin-bottom:4px;">{ev.get("event","")}</div>
+                <div style="font-size:9px;color:{bdr};font-weight:700;margin-bottom:2px;">{day_line}</div>
+                <div style="font-size:11px;font-weight:600;color:#cbd5e1;margin-bottom:4px;">{ev.get("event","")}{actual_bit}</div>
                 <div style="display:flex;gap:10px;">
-                    <div style="font-size:10px;color:#475569;">Fcst: <span style="color:#a5b4fc;font-family:monospace;">{ev.get("forecast","—")}</span></div>
-                    <div style="font-size:10px;color:#475569;">Prev: <span style="color:#94a3b8;font-family:monospace;">{ev.get("previous","—")}</span></div>
-                    {f'<div style="font-size:10px;color:#4ade80;font-weight:700;">Act: {ev["actual"]}</div>' if ev.get("actual") else ""}
+                    <div style="font-size:10px;color:#475569;">Fcst: <span style="color:#a5b4fc;font-family:monospace;">{forecast}</span></div>
+                    <div style="font-size:10px;color:#475569;">Prev: <span style="color:#94a3b8;font-family:monospace;">{previous}</span></div>
                 </div>
             </div>""", unsafe_allow_html=True)
 
