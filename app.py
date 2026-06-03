@@ -204,7 +204,10 @@ def build_context(prices, headlines, gnews, fred, fh_news, ff_cal):
     lines.append("=== LIVE PRICES (Alpha Vantage) ===")
     for k,v in prices.items():
         chg = f" ({v['change_pct']:+.2f}%)" if v.get("change_pct") is not None else ""
-        lines.append(f"{k}: {'$'+f'{v[\"price\"]:,.2f}'+chg if v.get('price') else 'N/A'}")
+        if v.get("price"):
+            lines.append(f"{k}: ${v['price']:,.2f}{chg}")
+        else:
+            lines.append(f"{k}: N/A")
     if fred:
         lines.append("\n=== US MACRO DATA (FRED — St. Louis Fed) ===")
         for d in fred.values():
