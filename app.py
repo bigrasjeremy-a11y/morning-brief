@@ -18,8 +18,8 @@ TODAY           = datetime.now().strftime("%A, %B %d, %Y")
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=DM+Mono:wght@400;500&display=swap');
-html,body,[class*="css"],.stApp{font-family:'DM Sans',system-ui,sans-serif!important;background-color:#080c12!important;color:#e2e8f0!important}
-.stApp{background-color:#080c12!important}
+html,body,[class*="css"],.stApp{font-family:'DM Sans',system-ui,sans-serif!important;background-color:#111827!important;color:#e2e8f0!important}
+.stApp{background-color:#111827!important}
 .block-container{max-width:960px!important;padding:0 24px 48px 24px!important;margin:0 auto!important}
 #MainMenu,footer,header,.stDeployButton{visibility:hidden!important;display:none!important}
 .stTabs{width:100%!important}
@@ -220,6 +220,47 @@ def fetch_finnhub_news(api_key):
             return [{"title":i.get("headline","")[:120],"summary":i.get("summary","")[:200],"url":i.get("url",""),"source":i.get("source","Finnhub")} for i in r.json()[:10]]
     except: pass
     return []
+
+def fetch_ai_calendar(mdata: str) -> list:
+    """Dedicated call to generate this week's economic calendar from AI."""
+    CAL_SYS = f"""You are an economic calendar expert. Today is {TODAY}.
+List ALL high-impact (red folder) and medium-impact (orange folder) USD economic events from ForexFactory for this week.
+Include events that have already happened this week with their actual values.
+Return ONLY a JSON array — no wrapper object, just the array:
+[
+  {{
+    "day": "Mon/Tue/Wed/Thu/Fri",
+    "date": "e.g. Jun 3",
+    "time": "e.g. 8:30 AM ET",
+    "event": "Full official event name",
+    "impact": "red or orange",
+    "forecast": "consensus value or blank",
+    "previous": "prior value or blank",
+    "actual": "actual value if already released this week, else blank",
+    "affects": "which of XAU/USD NQ ES US30 are affected",
+    "why": "1 sentence: what a beat/miss means for markets"
+  }}
+]
+Include at minimum: NFP, CPI, PPI, FOMC, GDP, PCE, Retail Sales, ISM, Jobless Claims, any Fed speeches this week. Only include USD events."""
+
+    try:
+        raw = call_groq(CAL_SYS,
+            f"Today is {TODAY}. Market context:\n{mdata[:1000]}\n\nList this week's ForexFactory red and orange folder USD events as a JSON array.",
+            1500)
+        raw = raw.replace("```json","").replace("```","").strip()
+        # Handle both array and wrapped object
+        if raw.startswith("["):
+            import json as _json
+            return _json.loads(raw)
+        else:
+            import json as _json
+            s, e = raw.find("["), raw.rfind("]")
+            if s != -1 and e > s:
+                return _json.loads(raw[s:e+1])
+    except Exception as ex:
+        pass
+    return []
+
 
 def build_context(prices, headlines, gnews, fred, fh_news, ff_cal):
     lines = [f"TODAY: {TODAY}\n"]
@@ -540,7 +581,131 @@ def render_inst(data):
     st.markdown('<div style="font-size:10px;color:#1e293b;text-align:center;margin-top:18px;letter-spacing:.08em;text-transform:uppercase;">Not financial advice</div>', unsafe_allow_html=True)
 
 # ── NEWS TAB ──────────────────────────────────────────────────────────────────
-def render_news(headlines, news_data, ff_cal):
+def render_news(headlines, news_data, ff_cal, cal_data):
+    """Render news tab. cal_data is the dedicated AI calendar list."""
+
+    # ── ECONOMIC SCHEDULE ────────────────────────────────────────────────────
+    st.markdown("### 📅 Economic Schedule")
+    st.caption("Red 🔴 and orange 🟠 folder events from ForexFactory — includes forecast, previous & actual values")
+
+    calendar = cal_data or ff_cal or news_data.get("calendar", [])
+
+    if calendar:
+        for ev in calendar:
+            impact   = str(ev.get("impact","orange")).lower()
+            is_red   = impact in ("red","high")
+            folder   = "🔴" if is_red else "🟠"
+            bdr      = "#ef4444" if is_red else "#f97316"
+            bg_ev    = "rgba(239,68,68,.07)" if is_red else "rgba(249,115,22,.05)"
+            event    = ev.get("event","")
+            day      = ev.get("day","")
+            date     = ev.get("date","")
+            time_s   = ev.get("time","")
+            forecast = str(ev.get("forecast","") or "—")
+            previous = str(ev.get("previous","") or "—")
+            actual   = str(ev.get("actual","") or "")
+            affects  = str(ev.get("affects","") or "")
+            why      = str(ev.get("why","") or ev.get("why_it_matters","") or "")
+            day_str  = " ".join(filter(None, [day, date, "·" if time_s else "", time_s])).strip(" ·")
+
+            # Build HTML with no inline conditionals
+            actual_badge = ""
+            if actual and actual not in ("", "—", "None"):
+                actual_badge = f'<span style="background:rgba(34,197,94,.15);color:#4ade80;font-size:10px;font-weight:700;padding:2px 7px;border-radius:4px;margin-left:6px;">✓ {actual}</span>'
+
+            affects_html = ""
+            if affects and affects not in ("", "None"):
+                affects_html = f'<div style="font-size:10px;color:#64748b;margin-top:5px;">Affects: {affects}</div>'
+
+            why_html = ""
+            if why and why not in ("", "None"):
+                why_html = f'<div style="font-size:11px;color:#64748b;line-height:1.5;padding-top:6px;border-top:1px solid rgba(255,255,255,.05);margin-top:6px;">{why}</div>'
+
+            st.markdown(f"""
+            <div style="background:{bg_ev};border:1px solid {bdr}44;border-left:3px solid {bdr};
+                border-radius:9px;padding:12px 15px;margin-bottom:8px;">
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
+                    <span style="font-size:14px;">{folder}</span>
+                    <span style="font-size:11px;font-weight:700;color:{bdr};">{day_str}</span>
+                    <span style="font-size:13px;font-weight:700;color:#f1f5f9;">{event}</span>
+                    {actual_badge}
+                </div>
+                <div style="display:flex;gap:24px;">
+                    <div>
+                        <div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.08em;margin-bottom:3px;">Forecast</div>
+                        <div style="font-size:14px;font-weight:700;color:#a5b4fc;font-family:'DM Mono',monospace;">{forecast}</div>
+                    </div>
+                    <div>
+                        <div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.08em;margin-bottom:3px;">Previous</div>
+                        <div style="font-size:14px;font-weight:700;color:#94a3b8;font-family:'DM Mono',monospace;">{previous}</div>
+                    </div>
+                </div>
+                {affects_html}
+                {why_html}
+            </div>""", unsafe_allow_html=True)
+    else:
+        st.info("No calendar data — click Generate Brief to load the economic schedule.")
+
+    st.markdown("---")
+
+    # ── NEWS HEADLINES ───────────────────────────────────────────────────────
+    c1, c2 = st.columns([2, 1])
+    with c1:
+        st.markdown('<div style="font-size:11px;font-weight:700;color:#475569;letter-spacing:.1em;text-transform:uppercase;margin-bottom:10px;">Latest Headlines</div>', unsafe_allow_html=True)
+        items = news_data.get("news") or [{"headline":h["title"],"summary":"","url":h["link"],"source":h["source"],"time":"","impact":"medium","category":"Macro"} for h in headlines]
+        for item in items[:8]:
+            imp = item.get("impact","medium")
+            cat = item.get("category","Macro")
+            bdr = "#ef4444" if imp=="high" else "#f59e0b" if imp=="medium" else "#334155"
+            cc  = CAT_C.get(cat,"#94a3b8")
+            ib  = "rgba(239,68,68,.12)" if imp=="high" else "rgba(251,191,36,.1)" if imp=="medium" else "rgba(148,163,184,.08)"
+            ic  = "#f87171" if imp=="high" else "#fbbf24" if imp=="medium" else "#64748b"
+            url = item.get("url","")
+            headline  = item.get("headline","")
+            summary   = item.get("summary","")
+            source    = item.get("source","")
+            time_str  = item.get("time","")
+            link_html = f'<a href="{url}" target="_blank" style="font-size:10px;color:#4f46e5;text-decoration:none;">Read full article ↗</a>' if url else ""
+            mb = "4" if url else "0"
+            st.markdown(f"""
+            <div style="background:rgba(255,255,255,.02);border:1px solid rgba(255,255,255,.06);
+                border-radius:9px;padding:11px 13px;margin-bottom:7px;border-left:2px solid {bdr};">
+                <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;flex-wrap:wrap;">
+                    <span style="font-size:10px;color:#334155;font-family:'DM Mono',monospace;">{time_str}</span>
+                    <span style="font-size:9px;padding:2px 5px;background:{cc}20;color:{cc};border-radius:4px;font-weight:700;">{cat}</span>
+                    <span style="font-size:9px;padding:2px 5px;background:{ib};color:{ic};border-radius:4px;font-weight:700;text-transform:uppercase;">{imp}</span>
+                    <span style="font-size:9px;color:#334155;">{source}</span>
+                </div>
+                <div style="font-size:12px;font-weight:600;color:#e2e8f0;line-height:1.5;margin-bottom:4px;">{headline}</div>
+                <div style="font-size:12px;color:#64748b;line-height:1.55;margin-bottom:{mb}px;">{summary}</div>
+                {link_html}
+            </div>""", unsafe_allow_html=True)
+
+    with c2:
+        st.markdown('<div style="font-size:11px;font-weight:700;color:#475569;letter-spacing:.1em;text-transform:uppercase;margin-bottom:3px;">Quick Reference</div><div style="font-size:10px;color:#334155;margin-bottom:10px;">🔴 Red · 🟠 Orange</div>', unsafe_allow_html=True)
+        for ev in calendar[:8]:
+            impact = str(ev.get("impact","orange")).lower()
+            is_red = impact in ("red","high")
+            bdr    = "#ef4444" if is_red else "#f97316"
+            folder = "🔴" if is_red else "🟠"
+            fcst   = str(ev.get("forecast","") or "—")
+            prev   = str(ev.get("previous","") or "—")
+            act    = str(ev.get("actual","") or "")
+            act_html = f'<span style="color:#4ade80;font-weight:700;font-size:10px;"> ✓{act}</span>' if act and act not in ("","—","None") else ""
+            st.markdown(f"""
+            <div style="background:rgba(255,255,255,.02);border:1px solid {bdr}33;border-left:2px solid {bdr};
+                border-radius:7px;padding:9px 11px;margin-bottom:5px;">
+                <div style="font-size:9px;color:{bdr};font-weight:700;margin-bottom:2px;">
+                    {folder} {ev.get("day","")} {ev.get("date","")} · {ev.get("time","")}</div>
+                <div style="font-size:11px;font-weight:600;color:#cbd5e1;margin-bottom:4px;">
+                    {ev.get("event","")}{act_html}</div>
+                <div style="display:flex;gap:10px;">
+                    <span style="font-size:10px;color:#475569;">Fcst: <b style="color:#a5b4fc;font-family:monospace;">{fcst}</b></span>
+                    <span style="font-size:10px;color:#475569;">Prev: <b style="color:#94a3b8;font-family:monospace;">{prev}</b></span>
+                </div>
+            </div>""", unsafe_allow_html=True)
+
+
     # ForexFactory Calendar Schedule — full width at top
     st.markdown('<div style="font-size:13px;font-weight:700;color:#f1f5f9;margin-bottom:4px;">📅 Economic Schedule — ForexFactory</div>', unsafe_allow_html=True)
     st.markdown('<div style="font-size:11px;color:#475569;margin-bottom:12px;">Red & orange folder events affecting your assets. Includes forecast, previous, and actual values.</div>', unsafe_allow_html=True)
@@ -687,7 +852,7 @@ def main():
         st.session_state.dark_mode = True
 
     is_dark = st.session_state.dark_mode
-    bg       = "#080c12" if is_dark else "#f8fafc"
+    bg       = "#111827" if is_dark else "#f8fafc"
     bg2      = "rgba(255,255,255,.025)" if is_dark else "rgba(0,0,0,.04)"
     border_c = "rgba(255,255,255,.08)" if is_dark else "rgba(0,0,0,.1)"
     text_p   = "#f1f5f9" if is_dark else "#0f172a"
@@ -764,7 +929,7 @@ def main():
     if not GROQ_API_KEY:
         st.error("⚠ GROQ_API_KEY not found — go to Manage App → Secrets."); st.stop()
 
-    for k in ["brief","outlook","inst","news_data","deep_dives","prices","headlines","ff_cal","ready","expanded_inst","mdata"]:
+    for k in ["brief","outlook","inst","news_data","cal_data","deep_dives","prices","headlines","ff_cal","ready","expanded_inst","mdata"]:
         if k not in st.session_state: st.session_state[k] = None
 
     t1,t2,t3 = st.tabs(["📊   Brief", "📰   News & Schedule", "🏦   Institutions"])
@@ -825,6 +990,9 @@ def main():
                 ff_note = f"ForexFactory live calendar data:\n{ff_ctx}" if (st.session_state.ff_cal or []) else "No live ForexFactory data available — generate the calendar from your knowledge of this week's USD economic events."
                 st.session_state.news_data = parse_json(call_groq(NEWS_SYS,
                     f"Headlines:\n{n_ctx}\n\n{ff_note}\n\nGenerate the full JSON including a complete economic calendar for the week.", 2200))
+
+                prog.markdown('<div style="text-align:center;font-size:11px;color:#64748b;letter-spacing:.1em;text-transform:uppercase;padding:8px 0;">Loading economic calendar...</div>', unsafe_allow_html=True)
+                st.session_state.cal_data = fetch_ai_calendar(mdata)
 
                 st.session_state.deep_dives    = {}
                 st.session_state.inst          = None
@@ -913,7 +1081,7 @@ def main():
             _,ref_c,_ = st.columns([1,1,1])
             with ref_c:
                 if st.button("↺   Refresh Brief", use_container_width=True):
-                    for k in ["brief","outlook","inst","news_data","deep_dives","prices","headlines","ff_cal","ready","expanded_inst","mdata"]:
+                    for k in ["brief","outlook","inst","news_data","cal_data","deep_dives","prices","headlines","ff_cal","ready","expanded_inst","mdata"]:
                         st.session_state[k] = None
                     st.rerun()
             st.markdown('<div style="text-align:center;font-size:10px;color:#1e293b;letter-spacing:.06em;margin-top:4px;">NOT FINANCIAL ADVICE · GROQ + ALPHA VANTAGE + FOREXFACTORY + INVESTINGLIVE</div>', unsafe_allow_html=True)
@@ -922,7 +1090,7 @@ def main():
         if not st.session_state.ready:
             st.info("Generate a brief first to load news and the ForexFactory schedule.")
         else:
-            render_news(st.session_state.headlines or [], st.session_state.news_data or {}, st.session_state.ff_cal or [])
+            render_news(st.session_state.headlines or [], st.session_state.news_data or {}, st.session_state.ff_cal or [], st.session_state.cal_data or [])
 
     with t3:
         if not st.session_state.ready:
