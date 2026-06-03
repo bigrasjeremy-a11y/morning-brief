@@ -113,45 +113,106 @@ def fetch_headlines():
 
 @st.cache_data(ttl=300)
 def fetch_forexfactory():
-    """Fetch this week's USD high-impact events from ForexFactory via JBlanked free API."""
+    """
+    Fetch USD high-impact (red) and medium-impact (orange) events.
+    Tries three sources in order:
+    1. JBlanked ForexFactory API (free, no key)
+    2. MQL5 calendar via JBlanked (backup)
+    3. Finnhub economic calendar (if API key available)
+    """
     events = []
-    for endpoint in ["week","today"]:
+
+    # Source 1: JBlanked ForexFactory endpoint
+    for impact_label, impact_param in [("red","High"), ("orange","Medium")]:
+        for endpoint in ["week","today"]:
+            try:
+                r = requests.get(
+                    f"https://www.jblanked.com/news/api/forex-factory/calendar/{endpoint}/",
+                    params={"currency":"USD","impact":impact_param},
+                    timeout=12,
+                    headers={"User-Agent":"Mozilla/5.0 (compatible; MorningBrief/1.0)"}
+                )
+                if r.status_code == 200:
+                    data = r.json()
+                    if isinstance(data, list) and len(data) > 0:
+                        for ev in data:
+                            events.append({
+                                "day":      ev.get("day", ev.get("date","")[:3] if ev.get("date") else ""),
+                                "date":     ev.get("date",""),
+                                "time":     ev.get("time",""),
+                                "event":    ev.get("title", ev.get("name", ev.get("event",""))),
+                                "currency": ev.get("currency","USD"),
+                                "impact":   impact_label,
+                                "forecast": ev.get("forecast","—") or "—",
+                                "previous": ev.get("previous","—") or "—",
+                                "actual":   ev.get("actual","") or "",
+                                "source":   "ForexFactory"
+                            })
+                        break
+            except:
+                pass
+
+    # Source 2: JBlanked MQL5 calendar (backup if ForexFactory returns nothing)
+    if not events:
+        for impact_label, impact_param in [("red","High"), ("orange","Medium")]:
+            for endpoint in ["week","today"]:
+                try:
+                    r = requests.get(
+                        f"https://www.jblanked.com/news/api/mql5/calendar/{endpoint}/",
+                        params={"currency":"USD","impact":impact_param},
+                        timeout=12,
+                        headers={"User-Agent":"Mozilla/5.0 (compatible; MorningBrief/1.0)"}
+                    )
+                    if r.status_code == 200:
+                        data = r.json()
+                        if isinstance(data, list) and len(data) > 0:
+                            for ev in data:
+                                events.append({
+                                    "day":      ev.get("day",""),
+                                    "date":     ev.get("date",""),
+                                    "time":     ev.get("time",""),
+                                    "event":    ev.get("title", ev.get("name", ev.get("event",""))),
+                                    "currency": ev.get("currency","USD"),
+                                    "impact":   impact_label,
+                                    "forecast": ev.get("forecast","—") or "—",
+                                    "previous": ev.get("previous","—") or "—",
+                                    "actual":   ev.get("actual","") or "",
+                                    "source":   "MQL5"
+                                })
+                            break
+                except:
+                    pass
+
+    # Source 3: Finnhub fallback (uses FINNHUB_API_KEY if available)
+    if not events and FINNHUB_API_KEY:
         try:
-            r = requests.get(f"https://www.jblanked.com/news/api/forex-factory/calendar/{endpoint}/",
-                params={"currency":"USD","impact":"High"}, timeout=10,
-                headers={"User-Agent":"MorningBrief/1.0"})
-            if r.status_code==200:
-                for ev in r.json():
-                    events.append({
-                        "date":     ev.get("date",""),
-                        "time":     ev.get("time",""),
-                        "event":    ev.get("title", ev.get("name","")),
-                        "currency": ev.get("currency","USD"),
-                        "impact":   "red",
-                        "forecast": ev.get("forecast","—"),
-                        "previous": ev.get("previous","—"),
-                        "actual":   ev.get("actual",""),
-                        "source":   "ForexFactory"
-                    })
-                if events: break
-        except: pass
-    # Also grab medium impact (orange)
-    for endpoint in ["week","today"]:
-        try:
-            r = requests.get(f"https://www.jblanked.com/news/api/forex-factory/calendar/{endpoint}/",
-                params={"currency":"USD","impact":"Medium"}, timeout=10,
-                headers={"User-Agent":"MorningBrief/1.0"})
-            if r.status_code==200:
-                for ev in r.json():
-                    events.append({
-                        "date":ev.get("date",""),"time":ev.get("time",""),
-                        "event":ev.get("title",ev.get("name","")),"currency":ev.get("currency","USD"),
-                        "impact":"orange","forecast":ev.get("forecast","—"),
-                        "previous":ev.get("previous","—"),"actual":ev.get("actual",""),"source":"ForexFactory"
-                    })
-                break
-        except: pass
-    return events[:20]
+            today  = datetime.now()
+            end    = today + timedelta(days=7)
+            r = requests.get("https://finnhub.io/api/v1/calendar/economic", params={
+                "from": today.strftime("%Y-%m-%d"),
+                "to":   end.strftime("%Y-%m-%d"),
+                "token": FINNHUB_API_KEY
+            }, timeout=10)
+            if r.status_code == 200:
+                for ev in r.json().get("economicCalendar",[]):
+                    imp = str(ev.get("impact","")).lower()
+                    if imp in ("high","3"):
+                        events.append({
+                            "day":      "",
+                            "date":     ev.get("time","")[:10],
+                            "time":     ev.get("time","")[11:16] if len(ev.get("time",""))>10 else "",
+                            "event":    ev.get("event",""),
+                            "currency": ev.get("country","").upper(),
+                            "impact":   "red",
+                            "forecast": str(ev.get("estimate","—")) or "—",
+                            "previous": str(ev.get("prev","—")) or "—",
+                            "actual":   str(ev.get("actual","")) if ev.get("actual") else "",
+                            "source":   "Finnhub"
+                        })
+        except:
+            pass
+
+    return events[:25]
 
 @st.cache_data(ttl=1800)
 def fetch_fred(api_key):
@@ -393,7 +454,7 @@ def render_card(inst, inst_data, prices, expanded_inst):
     is_exp = expanded_inst == inst
 
     st.markdown(f"""
-    <div style="background:rgba(255,255,255,.025);border:2px solid {cbord};border-top:3px solid {color};
+    <div style="background:rgba(255,255,255,.025);border:2px solid {cbord};
         border-radius:12px;padding:16px 18px;margin-bottom:4px;box-shadow:{cglow};">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;">
             <div><div style="display:flex;align-items:center;gap:6px;margin-bottom:2px;">
@@ -620,14 +681,44 @@ def render_news(headlines, news_data, ff_cal):
 # ── MAIN ──────────────────────────────────────────────────────────────────────
 def main():
     now = datetime.now().strftime("%a %b %d, %Y · %I:%M %p")
-    st.markdown(f"""
-    <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 0 14px;margin-bottom:20px;border-bottom:1px solid rgba(255,255,255,.05);">
-        <div style="display:flex;align-items:center;gap:10px;">
+
+    # ── THEME TOGGLE ──────────────────────────────────────────────────────────
+    if "dark_mode" not in st.session_state:
+        st.session_state.dark_mode = True
+
+    is_dark = st.session_state.dark_mode
+    bg       = "#080c12" if is_dark else "#f8fafc"
+    bg2      = "rgba(255,255,255,.025)" if is_dark else "rgba(0,0,0,.04)"
+    border_c = "rgba(255,255,255,.08)" if is_dark else "rgba(0,0,0,.1)"
+    text_p   = "#f1f5f9" if is_dark else "#0f172a"
+    text_s   = "#94a3b8" if is_dark else "#475569"
+    text_m   = "#64748b" if is_dark else "#64748b"
+    divider  = "rgba(255,255,255,.05)" if is_dark else "rgba(0,0,0,.08)"
+
+    # Inject theme CSS
+    st.markdown(f"""<style>
+    html,body,[class*="css"],.stApp{{background-color:{bg}!important;color:{text_p}!important}}
+    .stApp{{background-color:{bg}!important}}
+    .block-container{{background-color:{bg}!important}}
+    </style>""", unsafe_allow_html=True)
+
+    # Header with toggle
+    toggle_icon = "☀️" if is_dark else "🌙"
+    toggle_label = " Light" if is_dark else " Dark"
+    col_logo, col_toggle = st.columns([6, 1])
+    with col_logo:
+        st.markdown(f"""
+        <div style="display:flex;align-items:center;gap:10px;padding:16px 0 14px;margin-bottom:4px;border-bottom:1px solid {divider};">
             <div style="width:30px;height:30px;border-radius:9px;background:linear-gradient(135deg,#1e40af,#6d28d9);display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:800;color:white;">J</div>
-            <div><div style="font-size:14px;font-weight:700;color:#f1f5f9;">Morning Brief</div>
-            <div style="font-size:10px;color:#334155;letter-spacing:.06em;">{now}</div></div>
-        </div>
-    </div>""", unsafe_allow_html=True)
+            <div><div style="font-size:14px;font-weight:700;color:{text_p};">Morning Brief</div>
+            <div style="font-size:10px;color:{text_m};letter-spacing:.06em;">{now}</div></div>
+        </div>""", unsafe_allow_html=True)
+    with col_toggle:
+        st.markdown('<div style="padding-top:14px;"></div>', unsafe_allow_html=True)
+        if st.button(f"{toggle_icon}{toggle_label}", key="theme_toggle"):
+            st.session_state.dark_mode = not st.session_state.dark_mode
+            st.rerun()
+    st.markdown('<div style="margin-bottom:16px;"></div>', unsafe_allow_html=True)
 
     if not GROQ_API_KEY:
         st.error("⚠ GROQ_API_KEY not found — go to Manage App → Secrets."); st.stop()
