@@ -8,9 +8,12 @@ import feedparser
 
 st.set_page_config(page_title="Morning Brief — Jacob", page_icon="📊", layout="centered", initial_sidebar_state="collapsed")
 
-GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", os.environ.get("GROQ_API_KEY", ""))
-AV_API_KEY   = st.secrets.get("AV_API_KEY",   os.environ.get("AV_API_KEY",   ""))
-TODAY        = datetime.now().strftime("%A, %B %d, %Y")
+GROQ_API_KEY     = st.secrets.get("GROQ_API_KEY",     os.environ.get("GROQ_API_KEY",     ""))
+AV_API_KEY       = st.secrets.get("AV_API_KEY",       os.environ.get("AV_API_KEY",       ""))
+FINNHUB_API_KEY  = st.secrets.get("FINNHUB_API_KEY",  os.environ.get("FINNHUB_API_KEY",  ""))
+FRED_API_KEY     = st.secrets.get("FRED_API_KEY",      os.environ.get("FRED_API_KEY",     ""))
+GNEWS_API_KEY    = st.secrets.get("GNEWS_API_KEY",     os.environ.get("GNEWS_API_KEY",    ""))
+TODAY            = datetime.now().strftime("%A, %B %d, %Y")
 
 st.markdown("""
 <style>
@@ -106,15 +109,297 @@ def fetch_prices(av_key):
     except: pass
     return p
 
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=300)
 def fetch_headlines():
-    out=[]
-    for url in ["https://feeds.finance.yahoo.com/rss/2.0/headline?s=^GSPC&region=US&lang=en-US","https://www.cnbc.com/id/100003114/device/rss/rss.html","https://feeds.reuters.com/reuters/businessNews"]:
+    """Pull from InvestingLive, Reuters, CNBC, Yahoo Finance RSS feeds."""
+    sources = [
+        # InvestingLive (formerly Forexlive) — real-time market news, captures DeItaone-style alerts
+        ("https://investinglive.com/feed/",                                                    "InvestingLive"),
+        ("https://www.cnbc.com/id/100003114/device/rss/rss.html",                             "CNBC Markets"),
+        ("https://feeds.reuters.com/reuters/businessNews",                                     "Reuters Business"),
+        ("https://feeds.finance.yahoo.com/rss/2.0/headline?s=^GSPC&region=US&lang=en-US",     "Yahoo Finance"),
+        # Investing.com breaking news feeds
+        ("https://www.investing.com/rss/news_1.rss",   "Investing.com Forex"),
+        ("https://www.investing.com/rss/news_25.rss",  "Investing.com Commodities"),
+        ("https://www.investing.com/rss/news_14.rss",  "Investing.com Economy"),
+    ]
+    out = []
+    for url, label in sources:
         try:
-            feed=feedparser.parse(url)
-            for e in feed.entries[:4]: out.append({"title":e.get("title","")[:100],"link":e.get("link",""),"source":feed.feed.get("title","")})
-        except: pass
-    return out[:12]
+            feed = feedparser.parse(url)
+            for e in feed.entries[:3]:
+                out.append({
+                    "title":  e.get("title","")[:120],
+                    "link":   e.get("link",""),
+                    "source": label,
+                    "published": e.get("published","")
+                })
+        except:
+            pass
+    return out[:25]
+
+
+@st.cache_data(ttl=300)
+def fetch_forexfactory_calendar() -> list:
+    """
+    Fetch this week's high-impact USD events from the ForexFactory calendar
+    via the free JBlanked community API endpoint (no key required).
+    Filters to USD high-impact only — the events that move XAU/USD, NQ, ES, US30.
+    """
+    events = []
+    try:
+        r = requests.get(
+            "https://www.jblanked.com/news/api/forex-factory/calendar/week/",
+            params={"currency": "USD", "impact": "High"},
+            timeout=10,
+            headers={"User-Agent": "MorningBrief/1.0"}
+        )
+        if r.status_code == 200:
+            for ev in r.json():
+                events.append({
+                    "date":      ev.get("date", ""),
+                    "time":      ev.get("time", ""),
+                    "event":     ev.get("title", ev.get("name", "")),
+                    "currency":  ev.get("currency", "USD"),
+                    "impact":    "high",
+                    "forecast":  ev.get("forecast", ""),
+                    "previous":  ev.get("previous", ""),
+                    "actual":    ev.get("actual", ""),
+                    "source":    "ForexFactory"
+                })
+    except:
+        pass
+
+    # Also fetch today's events as a backup
+    if not events:
+        try:
+            r = requests.get(
+                "https://www.jblanked.com/news/api/forex-factory/calendar/today/",
+                params={"currency": "USD", "impact": "High"},
+                timeout=10,
+                headers={"User-Agent": "MorningBrief/1.0"}
+            )
+            if r.status_code == 200:
+                for ev in r.json():
+                    events.append({
+                        "date":     ev.get("date",""),
+                        "time":     ev.get("time",""),
+                        "event":    ev.get("title", ev.get("name","")),
+                        "currency": ev.get("currency","USD"),
+                        "impact":   "high",
+                        "forecast": ev.get("forecast",""),
+                        "previous": ev.get("previous",""),
+                        "actual":   ev.get("actual",""),
+                        "source":   "ForexFactory"
+                    })
+        except:
+            pass
+
+    return events[:12]
+
+
+@st.cache_data(ttl=600)
+def fetch_gnews(api_key: str) -> list:
+    """Fetch targeted geopolitical + macro news via GNews API."""
+    if not api_key:
+        return []
+    queries = [
+        "Iran Hormuz oil market",
+        "Federal Reserve interest rates inflation",
+        "gold XAU price market",
+        "S&P 500 Nasdaq stock market today",
+        "trade war tariffs economy",
+    ]
+    articles = []
+    for q in queries:
+        try:
+            r = requests.get("https://gnews.io/api/v4/search", params={
+                "q": q, "lang": "en", "country": "us",
+                "max": 2, "apikey": api_key,
+                "sortby": "publishedAt"
+            }, timeout=8)
+            if r.status_code == 200:
+                for a in r.json().get("articles", []):
+                    articles.append({
+                        "title":       a.get("title","")[:120],
+                        "description": a.get("description","")[:200],
+                        "url":         a.get("url",""),
+                        "source":      a.get("source",{}).get("name","GNews"),
+                        "published":   a.get("publishedAt",""),
+                        "query":       q
+                    })
+        except:
+            pass
+    return articles[:20]
+
+
+@st.cache_data(ttl=1800)
+def fetch_fred_macro(api_key: str) -> dict:
+    """Fetch key US macro indicators from FRED (St. Louis Fed)."""
+    if not api_key:
+        return {}
+    series = {
+        "FEDFUNDS":   "Fed Funds Rate",
+        "CPIAUCSL":   "CPI YoY",
+        "UNRATE":     "Unemployment Rate",
+        "DGS10":      "10Y Treasury Yield",
+        "DTWEXBGS":   "USD Trade-Weighted Index",
+        "DCOILWTICO": "WTI Crude Oil",
+        "BAMLH0A0HYM2":"High Yield Spread",
+    }
+    data = {}
+    for sid, label in series.items():
+        try:
+            r = requests.get("https://api.stlouisfed.org/fred/series/observations", params={
+                "series_id": sid, "api_key": api_key, "file_type": "json",
+                "sort_order": "desc", "limit": 2
+            }, timeout=8)
+            if r.status_code == 200:
+                obs = r.json().get("observations", [])
+                if obs and obs[0].get("value") != ".":
+                    val  = float(obs[0]["value"])
+                    prev = float(obs[1]["value"]) if len(obs) > 1 and obs[1].get("value") != "." else val
+                    data[sid] = {
+                        "label":     label,
+                        "value":     val,
+                        "prev":      prev,
+                        "change":    round(val - prev, 4),
+                        "direction": "up" if val > prev else "down",
+                        "date":      obs[0].get("date","")
+                    }
+        except:
+            pass
+    return data
+
+
+@st.cache_data(ttl=600)
+def fetch_finnhub_news(api_key: str) -> list:
+    """Fetch market news and economic calendar from Finnhub."""
+    if not api_key:
+        return []
+    news = []
+    try:
+        r = requests.get("https://finnhub.io/api/v1/news", params={
+            "category": "general", "token": api_key
+        }, timeout=8)
+        if r.status_code == 200:
+            for item in r.json()[:10]:
+                news.append({
+                    "title":    item.get("headline","")[:120],
+                    "summary":  item.get("summary","")[:200],
+                    "url":      item.get("url",""),
+                    "source":   item.get("source","Finnhub"),
+                    "datetime": item.get("datetime", 0)
+                })
+    except:
+        pass
+    return news
+
+
+@st.cache_data(ttl=1800)
+def fetch_finnhub_calendar(api_key: str) -> list:
+    """Fetch upcoming economic events from Finnhub."""
+    if not api_key:
+        return []
+    from datetime import timedelta
+    today  = datetime.now()
+    end    = today + timedelta(days=7)
+    events = []
+    try:
+        r = requests.get("https://finnhub.io/api/v1/calendar/economic", params={
+            "from": today.strftime("%Y-%m-%d"),
+            "to":   end.strftime("%Y-%m-%d"),
+            "token": api_key
+        }, timeout=8)
+        if r.status_code == 200:
+            for ev in r.json().get("economicCalendar", [])[:15]:
+                impact = ev.get("impact","")
+                # Only high impact
+                if impact in ("high","3","High"):
+                    events.append({
+                        "event":     ev.get("event",""),
+                        "country":   ev.get("country",""),
+                        "date":      ev.get("time",""),
+                        "estimate":  ev.get("estimate",""),
+                        "previous":  ev.get("prev",""),
+                        "impact":    "high"
+                    })
+    except:
+        pass
+    return events[:10]
+
+
+def build_market_context(prices: dict, rss: list, gnews: list,
+                          fred: dict, fh_news: list, fh_cal: list,
+                          ff_cal: list) -> str:
+    """Assemble all data sources into a rich context string for the AI."""
+    lines = [f"TODAY: {TODAY}\n"]
+
+    # Live prices
+    lines.append("=== LIVE PRICES (Alpha Vantage) ===")
+    for k, v in prices.items():
+        if v.get("price"):
+            chg = f" ({v['change_pct']:+.2f}%)" if v.get("change_pct") is not None else ""
+            lines.append(f"{k}: ${v['price']:,.2f}{chg}")
+        else:
+            lines.append(f"{k}: N/A")
+
+    # FRED macro data
+    if fred:
+        lines.append("\n=== US MACRO DATA (St. Louis Fed / FRED) ===")
+        for sid, d in fred.items():
+            arrow = "↑" if d["direction"] == "up" else "↓"
+            lines.append(f"{d['label']}: {d['value']} {arrow} (prev: {d['prev']}, as of {d['date']})")
+
+    # ForexFactory economic calendar — highest priority calendar source
+    if ff_cal:
+        lines.append("\n=== ECONOMIC CALENDAR (ForexFactory — USD High Impact Only) ===")
+        for ev in ff_cal:
+            parts = [f"{ev.get('date','')} {ev.get('time','')} — {ev.get('event','')} (USD)"]
+            if ev.get("forecast"): parts.append(f"Forecast: {ev['forecast']}")
+            if ev.get("previous"): parts.append(f"Previous: {ev['previous']}")
+            if ev.get("actual"):   parts.append(f"ACTUAL: {ev['actual']}")
+            lines.append(" | ".join(parts))
+
+    # InvestingLive — separated from other RSS for prominence
+    investinglive = [h for h in rss if h.get("source","") == "InvestingLive"]
+    other_rss     = [h for h in rss if h.get("source","") != "InvestingLive"]
+
+    if investinglive:
+        lines.append("\n=== BREAKING NEWS (InvestingLive — formerly Forexlive) ===")
+        lines.append("Note: InvestingLive captures real-time market alerts including DeItaone-style breaking news.")
+        for h in investinglive[:10]:
+            lines.append(f"• {h['title']}")
+
+    # GNews targeted searches
+    if gnews:
+        lines.append("\n=== TARGETED NEWS SEARCH (GNews — Iran/Hormuz, Fed, Gold, Stocks, Trade War) ===")
+        for a in gnews[:12]:
+            lines.append(f"[{a['source']}] {a['title']}")
+            if a.get("description"):
+                lines.append(f"  → {a['description'][:150]}")
+
+    # Finnhub market news
+    if fh_news:
+        lines.append("\n=== MARKET NEWS (Finnhub) ===")
+        for n in fh_news[:8]:
+            lines.append(f"[{n['source']}] {n['title']}")
+
+    # Finnhub calendar (supplement to ForexFactory)
+    if fh_cal:
+        lines.append("\n=== ECONOMIC CALENDAR (Finnhub — High Impact) ===")
+        for ev in fh_cal:
+            est  = f" | Est: {ev['estimate']}" if ev.get("estimate") else ""
+            prev = f" | Prev: {ev['previous']}" if ev.get("previous") else ""
+            lines.append(f"{ev['date']} — {ev['event']} ({ev['country']}){est}{prev}")
+
+    # Other RSS feeds
+    if other_rss:
+        lines.append("\n=== RSS FEEDS (CNBC / Reuters / Yahoo Finance / Investing.com) ===")
+        for h in other_rss[:10]:
+            lines.append(f"[{h['source']}] {h['title']}")
+
+    return "\n".join(lines)
 
 # ── PROMPTS ───────────────────────────────────────────────────────────────────
 BRIEF_SYS = f"""You are a senior macro trader. Today is {TODAY}. Write like Bloomberg Intelligence — precise, opinionated.
@@ -580,13 +865,37 @@ def main():
         if gen:
             prog = st.empty()
             try:
-                prog.markdown('<div style="text-align:center;font-size:11px;color:#64748b;letter-spacing:.1em;text-transform:uppercase;padding:8px 0;">Fetching live prices...</div>', unsafe_allow_html=True)
+                prog.markdown('<div style="text-align:center;font-size:11px;color:#64748b;letter-spacing:.1em;text-transform:uppercase;padding:8px 0;">Fetching live prices (Alpha Vantage)...</div>', unsafe_allow_html=True)
                 st.session_state.prices    = fetch_prices(AV_API_KEY)
+
+                prog.markdown('<div style="text-align:center;font-size:11px;color:#64748b;letter-spacing:.1em;text-transform:uppercase;padding:8px 0;">Fetching US macro data (FRED)...</div>', unsafe_allow_html=True)
+                fred_data = fetch_fred_macro(FRED_API_KEY)
+
+                prog.markdown('<div style="text-align:center;font-size:11px;color:#64748b;letter-spacing:.1em;text-transform:uppercase;padding:8px 0;">Searching geopolitical & macro news (GNews)...</div>', unsafe_allow_html=True)
+                gnews_data = fetch_gnews(GNEWS_API_KEY)
+
+                prog.markdown('<div style="text-align:center;font-size:11px;color:#64748b;letter-spacing:.1em;text-transform:uppercase;padding:8px 0;">Fetching market news & calendar (Finnhub)...</div>', unsafe_allow_html=True)
+                fh_news = fetch_finnhub_news(FINNHUB_API_KEY)
+                fh_cal  = fetch_finnhub_calendar(FINNHUB_API_KEY)
+
+                prog.markdown('<div style="text-align:center;font-size:11px;color:#64748b;letter-spacing:.1em;text-transform:uppercase;padding:8px 0;">Fetching ForexFactory calendar...</div>', unsafe_allow_html=True)
+                ff_cal_data = fetch_forexfactory_calendar()
+
+                prog.markdown('<div style="text-align:center;font-size:11px;color:#64748b;letter-spacing:.1em;text-transform:uppercase;padding:8px 0;">Fetching InvestingLive & news feeds...</div>', unsafe_allow_html=True)
                 st.session_state.headlines = fetch_headlines()
-                prices = st.session_state.prices
-                p_ctx  = "\n".join([f"{k}: ${v['price']:,.2f} ({v.get('change_pct',0):+.2f}%)" if v.get("price") else f"{k}: N/A" for k,v in prices.items()])
-                n_ctx  = "\n".join([f"- {h['title']} ({h['source']})" for h in (st.session_state.headlines or [])])
-                mdata  = f"TODAY: {TODAY}\nLIVE PRICES:\n{p_ctx}\n\nRECENT HEADLINES:\n{n_ctx}"
+
+                # Build rich context from all sources
+                mdata = build_market_context(
+                    st.session_state.prices,
+                    st.session_state.headlines,
+                    gnews_data,
+                    fred_data,
+                    fh_news,
+                    fh_cal,
+                    ff_cal_data
+                )
+                # Store for deep dives
+                st.session_state.mdata = mdata
 
                 prog.markdown('<div style="text-align:center;font-size:11px;color:#64748b;letter-spacing:.1em;text-transform:uppercase;padding:8px 0;">Generating analysis (1/3)...</div>', unsafe_allow_html=True)
                 st.session_state.brief = parse_json(call_groq(BRIEF_SYS, f"Market data:\n{mdata}\n\nGenerate the brief JSON.", 2200))
@@ -594,13 +903,40 @@ def main():
                 prog.markdown('<div style="text-align:center;font-size:11px;color:#64748b;letter-spacing:.1em;text-transform:uppercase;padding:8px 0;">Generating outlook (2/3)...</div>', unsafe_allow_html=True)
                 st.session_state.outlook = parse_json(call_groq(OUTLOOK_SYS, f"Market data:\n{mdata}\n\nWrite the outlook JSON.", 1200))
 
-                prog.markdown('<div style="text-align:center;font-size:11px;color:#64748b;letter-spacing:.1em;text-transform:uppercase;padding:8px 0;">Generating news (3/3)...</div>', unsafe_allow_html=True)
-                st.session_state.news_data = parse_json(call_groq(NEWS_SYS, f"Headlines:\n{n_ctx}\n\nConvert to JSON with high-impact calendar events this week for XAU/USD, NQ, ES, US30.", 1500))
+                prog.markdown('<div style="text-align:center;font-size:11px;color:#64748b;letter-spacing:.1em;text-transform:uppercase;padding:8px 0;">Generating news brief (3/3)...</div>', unsafe_allow_html=True)
+                # Build news context from all sources
+                all_headlines = []
+                il_items = [h for h in (st.session_state.headlines or []) if h.get("source") == "InvestingLive"]
+                for h in il_items[:6]:    all_headlines.append(f"[InvestingLive] {h['title']}")
+                for a in gnews_data[:6]:  all_headlines.append(f"[GNews/{a['source']}] {a['title']}")
+                for n in fh_news[:4]:     all_headlines.append(f"[Finnhub/{n['source']}] {n['title']}")
+                other_items = [h for h in (st.session_state.headlines or []) if h.get("source") != "InvestingLive"]
+                for h in other_items[:4]: all_headlines.append(f"[{h['source']}] {h['title']}")
+                n_ctx = "\n".join(all_headlines)
 
-                st.session_state.deep_dives  = {}
-                st.session_state.inst        = None
+                # ForexFactory calendar takes priority
+                if ff_cal_data:
+                    cal_lines = []
+                    for ev in ff_cal_data:
+                        parts = [f"{ev.get('date','')} {ev.get('time','')} — {ev.get('event','')} (USD, High Impact)"]
+                        if ev.get("forecast"): parts.append(f"Forecast: {ev['forecast']}")
+                        if ev.get("previous"): parts.append(f"Previous: {ev['previous']}")
+                        if ev.get("actual"):   parts.append(f"ACTUAL: {ev['actual']}")
+                        cal_lines.append(" | ".join(parts))
+                    cal_ctx = "\n".join(cal_lines)
+                elif fh_cal:
+                    cal_ctx = "\n".join([f"{ev['date']} — {ev['event']} ({ev['country']})" for ev in fh_cal])
+                else:
+                    cal_ctx = "No calendar data available."
+
+                st.session_state.news_data = parse_json(call_groq(NEWS_SYS,
+                    f"Headlines (InvestingLive is highest priority — it captures real-time breaking news):\n{n_ctx}\n\nEconomic Calendar (ForexFactory USD High Impact):\n{cal_ctx}\n\nConvert to JSON. Calendar events affect XAU/USD, NQ, ES, US30.",
+                    1800))
+
+                st.session_state.deep_dives   = {}
+                st.session_state.inst         = None
                 st.session_state.expanded_inst = None
-                st.session_state.ready       = True
+                st.session_state.ready        = True
                 prog.empty()
                 st.rerun()
             except Exception as e:
@@ -658,10 +994,12 @@ def main():
                                 # Generate deep dive if not cached
                                 if inst not in (st.session_state.deep_dives or {}):
                                     with st.spinner(f"Generating {inst} deep dive..."):
-                                        p_ctx  = "\n".join([f"{k}: ${v['price']:,.2f}" if v.get("price") else f"{k}: N/A" for k,v in prices.items()])
-                                        n_ctx  = "\n".join([f"- {h['title']}" for h in (st.session_state.headlines or [])])
+                                        mdata = getattr(st.session_state, "mdata", "")
+                                        if not mdata:
+                                            p_ctx = "\n".join([f"{k}: ${v['price']:,.2f}" if v.get("price") else f"{k}: N/A" for k,v in prices.items()])
+                                            mdata = f"TODAY: {TODAY}\nPRICES:\n{p_ctx}"
                                         raw = call_groq(DEEP_SYS,
-                                            f"Instrument: {inst} ({META.get(inst,('',''))[0]})\nBias: {d.get('bias','Neutral')}\nData:\nTODAY: {TODAY}\nPRICES:\n{p_ctx}\nHEADLINES:\n{n_ctx}\n\nWrite the deep-dive JSON.",
+                                            f"Instrument: {inst} ({META.get(inst,('',''))[0]})\nBias: {d.get('bias','Neutral')}\nMarket data:\n{mdata[:4000]}\n\nWrite the deep-dive JSON.",
                                             1800)
                                         if st.session_state.deep_dives is None:
                                             st.session_state.deep_dives = {}
@@ -717,11 +1055,12 @@ def main():
                     if st.button("🏦   Load Institutional Deep Dive", use_container_width=True):
                         with st.spinner("Generating institutional analysis..."):
                             brief  = st.session_state.brief or {}
-                            prices = st.session_state.prices or {}
-                            p_ctx  = "\n".join([f"{k}: ${v['price']:,.2f}" if v.get("price") else f"{k}: N/A" for k,v in prices.items()])
-                            n_ctx  = "\n".join([f"- {h['title']}" for h in (st.session_state.headlines or [])])
+                            mdata  = getattr(st.session_state, "mdata", "")
+                            if not mdata:
+                                prices = st.session_state.prices or {}
+                                mdata  = "PRICES:\n" + "\n".join([f"{k}: ${v['price']:,.2f}" if v.get("price") else f"{k}: N/A" for k,v in prices.items()])
                             st.session_state.inst = parse_json(call_groq(INST_SYS,
-                                f"Sentiment: {json.dumps(brief.get('institutional_sentiment',{}))}\nPrices:\n{p_ctx}\nHeadlines:\n{n_ctx}\n\nWrite the institutional JSON.", 2000))
+                                f"Institutional sentiment: {json.dumps(brief.get('institutional_sentiment',{}))}\nMarket data:\n{mdata[:4000]}\n\nWrite the institutional JSON.", 2000))
                             st.rerun()
             else:
                 render_inst(st.session_state.inst)
